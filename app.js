@@ -28,6 +28,7 @@
   const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[name] || paths.book}"/></svg>`;
   const e = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const el = selector => document.querySelector(selector);
+  let stateMigrated=false;
   function fresh() {return {version:2,selection:'1-100',types:[...EXAM_TYPES],counts:{single:20,cloze:2,reading:2,clozeBlanks:8,readingQuestions:5},title:'第 1 周 · 中考题型词汇练习',draft:[],sections:[],source:'ai',assignment:null,studentName:'同学',students:{},endpoint:'/api/generate'};}
   function readState() {
     try {
@@ -37,7 +38,10 @@
       if (!Array.isArray(merged.types) || !merged.types.length || merged.types.some(t=>!EXAM_TYPES.includes(t))) merged.types=[...EXAM_TYPES];
       if(!merged.counts || typeof merged.counts!=='object')merged.counts=fresh().counts;
       merged.studentName = String(merged.studentName || '同学').slice(0,30);
-      if(merged.assignment) merged.assignment=checkAssignment(merged.assignment);
+      if(merged.assignment){
+        const original=merged.assignment;merged.assignment=checkAssignment(original);
+        migrateOptionOrderRecords(merged,original,merged.assignment);
+      }
       try {
         const sections=Array.isArray(merged.sections)?merged.sections:[];
         const original=merged.draft;
@@ -164,6 +168,26 @@
     const text=JSON.stringify(assignment.sections.map(s=>({type:s.type,passage:s.passage,questions:s.questions})));let hash=2166136261;
     for(let i=0;i<text.length;i++)hash=Math.imul(hash^text.charCodeAt(i),16777619);
     return `${assignment.id}:${(hash>>>0).toString(36)}`;
+  }
+  function migrateOptionOrderRecords(saved,previous,current) {
+    try{
+      const content=a=>JSON.stringify(a.sections.map(s=>({id:s.id,type:s.type,passage:s.passage,questions:s.questions.map(q=>({id:q.id,prompt:q.prompt,answer:q.answer,wordIds:q.wordIds,blankNumber:q.blankNumber,options:[...q.options].sort()}))})));
+      if(content(previous)!==content(current))return;
+      const before=assignmentKey(previous),after=assignmentKey(current);if(before===after)return;
+      const oldPrefix=before+':day:',newPrefix=after+':day:';
+      for(const learner of Object.values(saved.students)){
+        if(!learner||typeof learner!=='object')continue;
+        if(learner.progress&&typeof learner.progress==='object'&&!Array.isArray(learner.progress)){
+          for(const [key,value] of Object.entries(learner.progress))if(key.startsWith(oldPrefix)){
+            const next=newPrefix+key.slice(oldPrefix.length);
+            if(!Object.hasOwn(learner.progress,next))learner.progress[next]=value;
+            delete learner.progress[key];
+          }
+        }
+        if(Array.isArray(learner.history))for(const entry of learner.history)if(entry&&typeof entry.id==='string'&&entry.id.startsWith(oldPrefix))entry.id=newPrefix+entry.id.slice(oldPrefix.length);
+      }
+      stateMigrated=true;
+    }catch{/* Invalid saved records are handled by the normal state validator. */}
   }
   function renderStudent() {
     const a=state.assignment;
@@ -409,5 +433,6 @@
   });
   document.addEventListener('input',event=>{if(event.target.id==='word-search'){search=event.target.value;wordPage=0;renderWordRows();}});
   document.addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.id==='range-input'){event.preventDefault();try{applyRange(event.target.value);}catch(error){toast(error.message,true);}}if(event.key==='Enter'&&event.target.id==='answer-input'){event.preventDefault();submitAnswer();}});
+  if(stateMigrated)save();
   render();
 })();
