@@ -238,10 +238,15 @@
     return {kind:'word-lab-assignment',version:2,id:raw.id,title:raw.title.trim(),wordIds:ws.map(w=>w.id),paper,questions:paper.questions,sections:paper.sections,createdAt:typeof raw.createdAt==='string'?raw.createdAt:new Date().toISOString(),source:['ai','sample','import'].includes(raw.source)?raw.source:'import'};
   }
   function checkDraft() {
+    const rangeInput=el('#range-input');
+    if(rangeInput&&rangeInput.value.trim()!==state.selection){
+      selected=C.parseSelection(rangeInput.value,words);state.selection=ranges(selected.map(w=>w.id));wordPage=0;rangeInput.value=state.selection;
+      if(el('#selected-count'))el('#selected-count').textContent=selected.length;renderWordRows();
+    }
     if(!selected.length)throw Error('请至少选择一个词条。');
     const types=selectedTypes();if(!types.length)throw Error('请至少选择一种中考题型。');
     for(const type of EXAM_TYPES){const input=el('#count-'+type);if(input){const n=Number(input.value),max=type==='single'?50:5;if(!Number.isInteger(n)||n<1||n>max)throw Error(`${typeNames[type]}数量须为 1–${max}。`);state.counts[type]=n;}}
-    state.types=types;return types;
+    state.types=types;save();return types;
   }
   function setDraft(raw,source) {
     const valid=X.validatePaper(raw,selected,state.types);
@@ -303,7 +308,7 @@
       try{body=JSON.parse(text);}catch{throw Error('AI 出题服务尚未接通。请先导出 AI 提示词，生成后导入 AI 题组。');}
       if(!res.ok)throw Error(body.error||'AI 出题失败，请检查服务设置。');
       }
-      if(selected.map(w=>w.id).join(',')!==requestIds.join(',') || state.types.join(',')!==requestTypes.join(',') || JSON.stringify(state.counts)!==JSON.stringify(requestCounts))throw Error('出题期间选词或题型已改变，请按当前设置重新生成。');
+      if(selected.map(w=>w.id).join(',')!==requestIds.join(',') || state.types.join(',')!==requestTypes.join(',') || JSON.stringify(state.counts)!==JSON.stringify(requestCounts) || el('#range-input')&&el('#range-input').value.trim()!==state.selection)throw Error('出题期间选词或题型已改变，请按当前设置重新生成。');
       if(JSON.stringify({draft:state.draft,sections:state.sections,assignment:state.assignment,source:state.source})!==requestDraft)throw Error('出题期间作业已修改，已保留你的修改，请重新生成。');
       setDraft(body.paper,'ai');
     }catch(error){if(el('#generation-status'))el('#generation-status').textContent='生成未完成，原作业仍保留。';throw control.signal.aborted?Error('已停止出题，原作业仍保留。'):error;}
