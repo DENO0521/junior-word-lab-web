@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const C = globalThis.WordPracticeCore, X = globalThis.WordLabExam, words = globalThis.WORDS;
+  const C = globalThis.WordPracticeCore, X = globalThis.WordLabExam, A = globalThis.WordLabAI, words = globalThis.WORDS;
   const byId = new Map(words.map(w => [w.id, w]));
   const STORAGE = 'word-lab-v2';
   const studentOnly = !!globalThis.WORD_LAB_STUDENT_ONLY;
@@ -49,6 +49,34 @@
     } catch { return fresh(); }
   }
   let state=readState(), nav=studentOnly?'student':'teacher', step='select', search='', wordPage=0, quiz=null, result=null, mistakeFilter='pending';
+  const AI_STORAGE='word-lab-deepseek-v1';
+  function readAISettings() {
+    const defaults={apiKey:'',baseUrl:'https://api.deepseek.com',model:'deepseek-flash',mode:'direct'};
+    if(studentOnly)return defaults;
+    let stored=null;
+    try {stored=JSON.parse(localStorage.getItem(AI_STORAGE));}catch {}
+    const config=stored&&typeof stored==='object'?stored:globalThis.WORD_LAB_TEACHER_CONFIG;
+    if(config&&typeof config==='object')return {...defaults,apiKey:typeof config.apiKey==='string'?config.apiKey.trim():'',model:['deepseek-flash','deepseek-v4-pro'].includes(config.model)?config.model:defaults.model,mode:config.mode==='server'?'server':'direct'};
+    if(['127.0.0.1','localhost'].includes(location.hostname))defaults.mode='server';
+    return defaults;
+  }
+  let aiSettings=readAISettings(), generation=null;
+  function settingsFromForm() {
+    return {apiKey:el('#ai-api-key').value.trim(),baseUrl:'https://api.deepseek.com',model:el('#ai-model').value,mode:el('#ai-mode').value};
+  }
+  function showAISettings() {
+    if(studentOnly)return;
+    modal('DeepSeek 设置',`<p class="muted small">填入 Key 后保存，以后直接点「AI 生成中考题组」。</p><div class="field" style="margin-top:18px"><label for="ai-api-key">DeepSeek API Key</label><div class="input-row"><input id="ai-api-key" type="password" autocomplete="off" spellcheck="false" value="${e(aiSettings.apiKey)}" placeholder="粘贴你的 DeepSeek API Key"><button class="btn small" data-action="toggle-ai-key">显示</button></div></div><div class="field" style="margin-top:14px"><label for="ai-model">出题模型</label><select id="ai-model"><option value="deepseek-flash" ${aiSettings.model==='deepseek-flash'?'selected':''}>DeepSeek Flash · 日常出题</option><option value="deepseek-v4-pro" ${aiSettings.model==='deepseek-v4-pro'?'selected':''}>DeepSeek V4 Pro</option></select></div><p class="helper">更换后的 Key 会记在本机浏览器，学生作业不会带上 Key。</p><details class="ai-advanced"><summary>其他连接方式</summary><div class="field"><label for="ai-mode">连接方式</label><select id="ai-mode"><option value="direct" ${aiSettings.mode==='direct'?'selected':''}>直接连接 DeepSeek（无需安装）</option><option value="server" ${aiSettings.mode==='server'?'selected':''}>已有本机出题服务</option></select></div><div class="field"><label for="ai-endpoint">已有服务接口地址</label><input id="ai-endpoint" value="${e(state.endpoint)}" placeholder="/api/generate"></div></details><p id="ai-test-status" class="helper" role="status" aria-live="polite"></p>`,btn('test-ai-connection','测试连接','check')+btn('save-ai-settings','保存设置','check','primary'));
+  }
+  async function testAIConnection(button) {
+    const status=el('#ai-test-status');button.disabled=true;status.textContent='正在检查连接…';
+    try {if(!A)throw Error('请使用最新版教师 HTML。');await A.testConnection(settingsFromForm());status.textContent='连接成功，可以开始出题。';}
+    catch(error){status.textContent=error.message;}
+    finally{button.disabled=false;}
+  }
+  function showTeacherGuide() {
+    modal('老师一分钟上手',`<p class="teacher-guide-lead">输入本周词号，生成题目，确认后发给学生练习。</p><ol class="teacher-guide-steps"><li><strong>选词、出题</strong><p>填词号，如 1-100；选题型，点击「AI 生成中考题组」。</p></li><li><strong>确认、发布</strong><p>检查文章、答案和解析，勾选审核通过，再点击「继续发布」→「发布这份作业」。</p></li><li><strong>发给学生</strong><p>点击「导出学生 HTML」，把文件发给学生打开做题。学生做完后导出成绩交给老师。</p></li></ol><p class="helper">学生在「我的错词本」复习。作业和成绩保存在各自浏览器，请及时导出留存。</p>`,btn('close-modal','知道了','check','primary'));
+  }
   if (globalThis.WORD_LAB_ASSIGNMENT) {
     try {state.assignment=checkAssignment(globalThis.WORD_LAB_ASSIGNMENT);} catch(error) {setTimeout(()=>toast(error.message,true),0);}
   }
@@ -84,7 +112,7 @@
   function draftPaper(questions=state.draft) {return {sections:state.sections.map(s=>({...s,questions:questions.filter(q=>q.sectionId===s.id)})).filter(s=>s.questions.length)};}
   function paperStats(paper=draftPaper()) {return X.validatePaper(paper,selected,EXAM_TYPES);}
   function heading(kicker,title,desc,action='') {return `<div class="page-intro"><div><div class="eyebrow">${e(kicker)}</div><h1>${e(title)}</h1><p class="subtitle">${e(desc)}</p></div>${action}</div>`;}
-  function btn(action,text,name='arrow',kind='') {return `<button class="btn ${kind}" data-action="${e(action)}">${icon(name)}${e(text)}</button>`;}
+  function btn(action,text,name='arrow',kind='') {return `<button class="btn ${kind}" data-action="${e(action)}" ${action==='generate-ai'&&generation?'disabled':''}>${icon(name)}${e(text)}</button>`;}
   function empty(title,desc,action='') {return `<div class="card empty"><div class="empty-mark">${icon('book')}</div><h2>${e(title)}</h2><p>${e(desc)}</p>${action}</div>`;}
   function overview(count,subtitle='本周已选词条') {
     return `<div class="overview"><section class="week-banner"><div><div class="banner-kicker">本周词汇 · 中考题型 · 基础难度</div><h2>每天 20 词，在文章里用起来</h2><p>单项选择、完形填空、阅读理解，连接背词与实战。</p></div><div class="mini-plan" aria-label="每周五天，每天20词">${['一','二','三','四','五'].map(d=>`<div class="day-bar"><span>20</span>周${d}</div>`).join('')}</div></section><section class="summary-card"><div class="label">${e(subtitle)}</div><div class="big">${count}<small>词条</small></div><div class="foot">AI 原创中考题型 · 老师审核后练习</div></section></div>`;
@@ -99,14 +127,14 @@
   }
   function renderTeacher() {
     const approved=state.draft.filter(q=>q.approved).length;
-    return heading('TEACHER WORKSPACE','用这一周的词，练中考题型。','选择本周词汇，生成单选、完形和阅读，审核完整题组后发布。',btn('import-assignment','导入作业','upload'))+
+    return heading('TEACHER WORKSPACE','用这一周的词，练中考题型。','输入本周词号，生成题目，确认后发给学生练习。',`<div class="row">${btn('teacher-guide','老师一分钟上手','help')}${btn('import-assignment','导入作业','upload','small')}</div>`)+
       overview(selected.length)+`<div class="steps" role="tablist" aria-label="作业制作步骤">${[['select','1','选词与出题'],['review','2',`审核题目${state.draft.length?` · ${state.draft.length}`:''}`],['publish','3','发布作业']].map(([id,n,t])=>`<button role="tab" aria-selected="${step===id}" class="${step===id?'active':''}" data-step="${id}"><span class="step-index">${n}</span>${t}</button>`).join('')}</div>`+
       (step==='select'?renderSelection():step==='review'?renderReview(approved):renderPublish(approved))+
       `<div class="footer-note">${icon('shield')}附件已核对：${words.length} 条词条；练习编号按原文顺序编排，原章节与原序号保留在词条中。</div>`;
   }
   function renderSelection() {
     const max=Math.max(...words.map(w=>w.id));
-    return `<div class="teacher-grid"><section class="card"><div class="card-heading"><h2><span class="section-number">1</span>选择本周已学词汇</h2><span class="tag">${words.length} 词条词表</span></div><div class="field"><label for="range-input">输入练习编号或范围</label><div class="input-row"><input id="range-input" value="${e(state.selection)}" placeholder="例如 1-100，105，110-120"><button class="btn soft" data-action="apply-range">应用序号</button></div><p class="helper">支持连续范围和多个编号，例如：1-20，35，50-60</p></div><div class="quick-select"><span class="small muted">按周选择</span>${Array.from({length:Math.ceil(max/100)},(_,i)=>{const a=i*100+1,b=Math.min((i+1)*100,max);return `<button data-range="${a}-${b}" class="${state.selection===`${a}-${b}`?'active':''}">第 ${i+1} 周</button>`;}).join('')}</div><div class="table-toolbar"><div class="small"><strong id="selected-count">${selected.length}</strong><span class="muted"> 个词条已选择</span></div><input id="word-search" type="search" aria-label="搜索词表" value="${e(search)}" placeholder="搜索单词、词义或编号"></div><div class="word-table-wrap"><table class="word-table"><thead><tr><th style="width:32px"><span class="sr-only">选择</span></th><th>编号</th><th>单词 / 词性</th><th>中文释义</th></tr></thead><tbody id="word-rows"></tbody></table></div><div class="table-footer"><span id="word-page-label"></span><div class="row"><button class="btn small" data-action="word-prev">上一页</button><button class="btn small" data-action="word-next">下一页</button></div></div></section><section class="card"><div class="card-heading"><h2><span class="section-number">2</span>选择中考题型</h2><span class="tag gray">基础难度</span></div><div class="type-list">${[['single','pen','单项选择','完整句子或短对话，四选一。'],['cloze','file','完形填空','一篇连贯短文，8 个编号空，四选一。'],['reading','book','阅读理解','完整文章，5 题，含细节与主旨理解。']].map(([id,ico,title,desc])=>`<label class="type-card ${state.types.includes(id)?'checked':''}"><input type="checkbox" name="question-type" value="${id}" ${state.types.includes(id)?'checked':''}><span class="type-icon">${icon(ico)}</span><span><strong>${title}</strong><p>${desc}</p></span></label>`).join('')}</div><div class="exam-counts">${[['single','单选 / 题',50],['cloze','完形 / 篇',5],['reading','阅读 / 篇',5]].map(([key,label,max])=>`<div class="field"><label for="count-${key}">${label}</label><input id="count-${key}" type="number" min="1" max="${max}" value="${state.counts[key]}"></div>`).join('')}</div><div class="generation-note">建议 100 词搭配 20 道单选、2 篇完形、2 篇阅读，分成 5 个题组。AI 用本周词汇组织语篇，分别统计语境覆盖与直接考查。</div><div class="generation-actions">${btn('generate-ai','AI 生成中考题组','spark','primary')}${btn('load-sample','查看中考题型示例','book')}</div><div class="generation-footer"><button class="btn text small" data-action="prompt">导出 AI 提示词</button><button class="btn text small" data-action="import-questions">导入 AI 题组</button><button class="btn text small" data-action="ai-settings" aria-label="AI服务设置">${icon('settings')}</button></div><div id="generation-status" class="helper" aria-live="polite"></div><p class="helper">AI 原创 · 参照中考题型，不标为历年真题。</p></section></div>`;
+    return `<div class="teacher-grid"><section class="card"><div class="card-heading"><h2><span class="section-number">1</span>选择本周已学词汇</h2><span class="tag">${words.length} 词条词表</span></div><div class="field"><label for="range-input">输入练习编号或范围</label><div class="input-row"><input id="range-input" value="${e(state.selection)}" placeholder="例如 1-100，105，110-120"><button class="btn soft" data-action="apply-range">应用序号</button></div><p class="helper">支持连续范围和多个编号，例如：1-20，35，50-60</p></div><div class="quick-select"><span class="small muted">按周选择</span>${Array.from({length:Math.ceil(max/100)},(_,i)=>{const a=i*100+1,b=Math.min((i+1)*100,max);return `<button data-range="${a}-${b}" class="${state.selection===`${a}-${b}`?'active':''}">第 ${i+1} 周</button>`;}).join('')}</div><div class="table-toolbar"><div class="small"><strong id="selected-count">${selected.length}</strong><span class="muted"> 个词条已选择</span></div><input id="word-search" type="search" aria-label="搜索词表" value="${e(search)}" placeholder="搜索单词、词义或编号"></div><div class="word-table-wrap"><table class="word-table"><thead><tr><th style="width:32px"><span class="sr-only">选择</span></th><th>编号</th><th>单词 / 词性</th><th>中文释义</th></tr></thead><tbody id="word-rows"></tbody></table></div><div class="table-footer"><span id="word-page-label"></span><div class="row"><button class="btn small" data-action="word-prev">上一页</button><button class="btn small" data-action="word-next">下一页</button></div></div></section><section class="card"><div class="card-heading"><h2><span class="section-number">2</span>选择中考题型</h2><span class="tag gray">基础难度</span></div><div class="type-list">${[['single','pen','单项选择','完整句子或短对话，四选一。'],['cloze','file','完形填空','一篇连贯短文，8 个编号空，四选一。'],['reading','book','阅读理解','完整文章，5 题，含细节与主旨理解。']].map(([id,ico,title,desc])=>`<label class="type-card ${state.types.includes(id)?'checked':''}"><input type="checkbox" name="question-type" value="${id}" ${state.types.includes(id)?'checked':''}><span class="type-icon">${icon(ico)}</span><span><strong>${title}</strong><p>${desc}</p></span></label>`).join('')}</div><div class="exam-counts">${[['single','单选 / 题',50],['cloze','完形 / 篇',5],['reading','阅读 / 篇',5]].map(([key,label,max])=>`<div class="field"><label for="count-${key}">${label}</label><input id="count-${key}" type="number" min="1" max="${max}" value="${state.counts[key]}"></div>`).join('')}</div><div class="generation-note">建议 100 词搭配 20 道单选、2 篇完形、2 篇阅读，分成 5 个题组。AI 用本周词汇组织语篇，分别统计语境覆盖与直接考查。</div><div class="generation-actions">${btn('generate-ai','AI 生成中考题组','spark','primary')}${btn('load-sample','查看中考题型示例','book')}</div><div class="generation-footer"><button class="btn text small" data-action="prompt">导出 AI 提示词</button><button class="btn text small" data-action="import-questions">导入 AI 题组</button><button class="btn text small" data-action="ai-settings">${icon('settings')}DeepSeek 设置</button></div><p class="ai-config-summary">${aiSettings.mode==='server'?'使用已有出题服务':aiSettings.apiKey?'DeepSeek 已配置 · 可直接出题':'首次使用：在下方 DeepSeek 设置中粘贴 Key'}</p><div id="generation-status" class="helper" aria-live="polite"></div><button id="cancel-ai" class="btn text small" data-action="cancel-ai" ${generation?'':'hidden'}>停止出题</button><p class="helper">AI 原创 · 参照中考题型，不标为历年真题。</p></section></div>`;
   }
   function filteredWords() {const term=search.trim().toLowerCase();return words.filter(w=>!term || `${w.id} ${w.word} ${w.meaning} ${w.pos}`.toLowerCase().includes(term));}
   function renderWordRows() {
@@ -201,7 +229,7 @@
     return heading('MY LEARNING RECORD','每次练习，都看得见进步。','这里展示当前学生在此浏览器完成的练习。',btn('export-results','导出我的成绩','download'))+profile()+(s.history.length?`<div class="history-list">${s.history.map(h=>{const correct=h.answers.filter(a=>a.correct).length;return `<article class="card history-row"><div><strong>${e(h.title)}</strong> <span class="tag ${h.review?'amber':'gray'}">${h.review?'错词复练':'每日练习'}</span><p class="small muted">${e(h.assignment)} · ${new Date(h.at).toLocaleString('zh-CN')} · ${h.answers.length} 题</p></div><div class="history-score">${Math.round(correct/h.answers.length*100)}<small>%</small></div></article>`;}).join('')}</div>`:empty('从第一份练习开始','完成每日练习后，你的首次提交成绩会记录在这里。',btn('go-student','开始每日练习','arrow','primary')));
   }
   function renderHelp() {
-    return heading('QUICK GUIDE','用已学词汇，练中考题型。','AI 原创中考题型专项练习，适当降低语言难度。')+`<div class="help-grid"><section class="card"><h2>老师怎么用</h2><ol><li>按唯一练习编号选择本周已学词条，如 1–100。</li><li>选择单项选择、完形填空、阅读理解，填写题数或篇数。</li><li>AI 生成题组，老师检查全文、每道题的答案与依据；完形和阅读按整组审核选用。</li><li>查看语境覆盖词条与直接考查词条，必要时修改文章、题目或关联考点词。</li><li>发布后导出学生 HTML。学生完成后导出成绩供老师收集，第一版尚无自动全班汇总。</li></ol></section><section class="card"><h2>学生怎么用</h2><ol><li>双击老师给的 HTML，或导入作业 JSON。</li><li>填写姓名并保存，完成一个完整题组。</li><li>阅读题和完形题的全文始终可查看，提交后看中文解析。</li><li>答错题目中明确标注的考点词进入错词本，连续两次复练正确后标记巩固。</li><li>阅读理解答错不会把全文所有词标错。定期导出成绩，换浏览器或清理缓存会影响本地记录。</li></ol></section><section class="card"><h2>真实 AI 出题与示例</h2><p>在本机 <code>.env</code> 中配置 <code>AI_API_KEY</code>、<code>AI_BASE_URL</code>、<code>AI_MODEL</code>，运行 <code>node server.js</code>，打开 <code>http://127.0.0.1:3099</code>。修改配置后重新启动服务。</p><p>没有 Key 时，可导出提示词到自己使用的 AI，生成 <code>{"sections":[...]}</code> 后粘贴或上传 JSON 导入。内置原创示例用于体验完整中考题型；单词拼写和词义题只用于错词巩固。</p>${!studentOnly?`<div class="row" style="margin-top:15px">${btn('ai-settings','AI 服务设置','settings','small')}${btn('prompt','导出提示词','file','small')}</div>`:''}</section><section class="card"><h2>题型与词表说明</h2><p>单选用完整句子或短对话；完形用连贯文章与编号空；阅读用独立完整文章配细节、主旨、简单推断题。默认题量是本产品练习建议，各地中考卷型不同。</p><p>附件实际 ${words.length} 条词条、${new Set(words.map(w=>w.word)).size} 个不同拼写。练习编号按原文顺序唯一编排；同词不同词性保留。语境覆盖按词及常见词形匹配，需老师核对含义。</p><p>姓名用于本机记录隔离，暂无账号与跨设备同步。HTML 中包含答案，适合自主巩固。</p></section></div>`;
+    return heading('QUICK GUIDE','输入词号，生成题目，发给学生。','老师确认后练习，学生做完复习错词。')+`<div class="help-grid">${!studentOnly?`<section class="card"><h2>老师每周只做三步</h2><ol><li><strong>选词出题：</strong>填本周词号，如 1–100，选题型，点「AI 生成中考题组」。</li><li><strong>审核发布：</strong>检查文章、答案和解析，确认选用后点「继续发布」→「发布这份作业」。</li><li><strong>发给学生：</strong>点「导出学生 HTML」，把文件发给学生。学生做完导出成绩交给老师。</li></ol><div class="row">${btn('teacher-guide','老师一分钟上手','help','small')}</div></section>`:''}<section class="card"><h2>学生这样练</h2><ol><li>打开老师发的 HTML，填写姓名并保存。</li><li>选题组开始练习，提交答案后看中文解析。</li><li>到「我的错词本」复习，连续两次复练正确可标记巩固。</li><li>做完点击「导出我的成绩」，把文件交给老师。</li></ol></section>${!studentOnly?`<section class="card"><h2>DeepSeek 已在页面内设置</h2><p>${aiSettings.apiKey?'这份教师文件已配置 Key，直接选词出题即可。':'首次使用，粘贴 DeepSeek API Key 并保存。'} 无需安装程序或运行命令，出题时需要联网。</p><p>更换 Key 或模型时点击下方设置。学生 HTML 不携带 Key；预配置 Key 的教师文件只发给负责出题的老师。</p><div class="row" style="margin-top:15px">${btn('ai-settings','DeepSeek 设置','settings','small')}</div></section>`:''}<section class="card"><h2>作业与记录</h2><p>发布后要把导出的学生 HTML 发给学生，只分享网站地址不会带上作业。成绩保存在各自浏览器里，换设备前请导出留存；暂不自动汇总全班成绩。</p><p>词表共 ${words.length} 条，编号按原文顺序。示例只用于试用流程，真实 AI 出题使用老师选中的词。文章出现某词不代表该词已被直接考查。</p></section></div>`;
   }
   function checkAssignment(raw) {
     if(!raw || raw.kind!=='word-lab-assignment' || raw.version!==2 || typeof raw.id!=='string' || !raw.id || raw.id.length>100 || typeof raw.title!=='string' || !raw.title.trim() || raw.title.length>100 || !Array.isArray(raw.wordIds) || !raw.wordIds.length || raw.wordIds.length>words.length || new Set(raw.wordIds).size!==raw.wordIds.length)throw Error('作业文件格式无效。请导入本程序导出的中考题组 JSON。');
@@ -252,21 +280,34 @@
     download(`${safeName(state.assignment.title)}-学生练习.html`,html,'text/html');toast('学生练习 HTML 已导出，可离线打开。');
   }
   async function generateAI(button) {
-    checkDraft();const requestIds=selected.map(w=>w.id),requestTypes=[...state.types],requestCounts={...state.counts};button.disabled=true;const status=el('#generation-status');
+    if(generation)throw Error('正在出题，请等待完成。');
+    checkDraft();
+    if(aiSettings.mode==='direct'&&!aiSettings.apiKey){showAISettings();el('#ai-test-status').textContent='首次使用，请填入 DeepSeek Key 并保存。';return;}
+    const requestIds=selected.map(w=>w.id),requestTypes=[...state.types],requestCounts={...state.counts};
+    const requestDraft=JSON.stringify({draft:state.draft,sections:state.sections,assignment:state.assignment,source:state.source});
+    button.disabled=true;const status=el('#generation-status');
     if(status)status.textContent=`正在围绕 ${selected.length} 个词条生成中考题组，请稍候…`;
     const jobs=(requestTypes.includes('single')?1:0)+(requestTypes.includes('cloze')?requestCounts.cloze:0)+(requestTypes.includes('reading')?requestCounts.reading:0);
-    const control=new AbortController(),timer=setTimeout(()=>control.abort(),Math.max(90000,jobs*65000));
+    const control=new AbortController(),timer=setTimeout(()=>control.abort(),Math.max(180000,jobs*180000));generation=control;
+    if(el('#cancel-ai'))el('#cancel-ai').hidden=false;
     try {
-      if(location.protocol==='file:' && state.endpoint.startsWith('/'))throw Error('双击 HTML 时请使用「导出 AI 提示词」后导入题目；直接 AI 出题需先运行 node server.js，并在本机服务页面打开。');
+      let body;
+      if(aiSettings.mode==='direct'){
+        if(!A)throw Error('请使用最新版教师 HTML。');
+        body=await A.generatePaper({wordIds:requestIds,types:requestTypes,counts:requestCounts},{...aiSettings},{words,exam:X,signal:control.signal,onProgress:progress=>{const current=el('#generation-status');if(current)current.textContent=progress.message;}});
+      }else{
+      if(location.protocol==='file:' && state.endpoint.startsWith('/'))throw Error('请在 DeepSeek 设置中选择「直接连接 DeepSeek」，即可双击文件出题。');
       const res=await fetch(state.endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({wordIds:requestIds,types:requestTypes,counts:requestCounts}),signal:control.signal});
       if(res.status===404)throw Error('AI 出题服务尚未接通。现在可以使用「导出 AI 提示词」和「导入 AI 题组」。');
       const text=await res.text();if(text.length>4*1024*1024)throw Error('AI 返回内容过大。');
-      let body;try{body=JSON.parse(text);}catch{throw Error('AI 出题服务尚未接通。请先导出 AI 提示词，生成后导入 AI 题组。');}
+      try{body=JSON.parse(text);}catch{throw Error('AI 出题服务尚未接通。请先导出 AI 提示词，生成后导入 AI 题组。');}
       if(!res.ok)throw Error(body.error||'AI 出题失败，请检查服务设置。');
+      }
       if(selected.map(w=>w.id).join(',')!==requestIds.join(',') || state.types.join(',')!==requestTypes.join(',') || JSON.stringify(state.counts)!==JSON.stringify(requestCounts))throw Error('出题期间选词或题型已改变，请按当前设置重新生成。');
+      if(JSON.stringify({draft:state.draft,sections:state.sections,assignment:state.assignment,source:state.source})!==requestDraft)throw Error('出题期间作业已修改，已保留你的修改，请重新生成。');
       setDraft(body.paper,'ai');
-    }catch(error){if(status)status.textContent='生成未完成，原作业仍保留。';throw error.name==='AbortError'?Error('AI 出题超时，请减少一次选择的词条数量。'):error;}
-    finally{clearTimeout(timer);button.disabled=false;}
+    }catch(error){if(el('#generation-status'))el('#generation-status').textContent='生成未完成，原作业仍保留。';throw control.signal.aborted?Error('已停止出题，原作业仍保留。'):error;}
+    finally{clearTimeout(timer);generation=null;button.disabled=false;document.querySelectorAll('[data-action="generate-ai"]').forEach(node=>node.disabled=false);if(el('#cancel-ai'))el('#cancel-ai').hidden=true;}
   }
   const handlers={
     'apply-range':()=>applyRange(el('#range-input').value),
@@ -297,8 +338,19 @@
     'export-html':exportHTML,'prompt':showPrompt,'close-modal':()=>el('#modal').close(),
     'download-prompt':()=>download('AI词汇练习提示词.txt',el('#prompt-text').value,'text/plain'),
     'copy-prompt':async()=>{try{await navigator.clipboard.writeText(el('#prompt-text').value);toast('提示词已复制。');}catch{el('#prompt-text').select();toast('请按 Ctrl+C 或长按复制选中的提示词。');}},
-    'ai-settings':()=>modal('AI 服务设置',`<p class="muted small" style="margin-bottom:17px">在本机运行 <code>node server.js</code> 后，通过服务地址打开网页。API Key 配置在本机 .env 中。</p><div class="field"><label for="ai-endpoint">AI 生成接口地址</label><input id="ai-endpoint" value="${e(state.endpoint)}" placeholder="/api/generate"><p class="helper">本机服务使用 /api/generate。线上静态网页建议使用提示词导出与题目导入。</p></div>`,btn('save-ai-settings','保存设置','check','primary')),
-    'save-ai-settings':()=>{const value=el('#ai-endpoint').value.trim();if(!/^\/(?!\/)/.test(value)&&!/^https?:\/\//i.test(value))throw Error('请输入相对路径或 HTTP / HTTPS 接口地址。');state.endpoint=value;save();el('#modal').close();toast('AI 服务设置已保存。');},
+    'ai-settings':showAISettings,
+    'teacher-guide':showTeacherGuide,
+    'test-ai-connection':testAIConnection,
+    'toggle-ai-key':button=>{const input=el('#ai-api-key');input.type=input.type==='password'?'text':'password';button.textContent=input.type==='password'?'显示':'隐藏';},
+    'cancel-ai':()=>{if(generation)generation.abort();},
+    'save-ai-settings':()=>{
+      const config=settingsFromForm(),value=el('#ai-endpoint').value.trim();
+      if(config.mode==='direct'&&!config.apiKey)throw Error('请先填入 DeepSeek API Key。');
+      if(config.mode==='server'&&!/^\/(?!\/)/.test(value)&&!/^https?:\/\//i.test(value))throw Error('请输入已有出题服务的接口地址。');
+      aiSettings=config;state.endpoint=value||'/api/generate';save();
+      try{localStorage.setItem(AI_STORAGE,JSON.stringify(config));}catch{toast('本次已配置；浏览器无法记住 Key，下次打开需要重新填写。',true);}
+      el('#modal').close();render();toast('已保存，可以开始出题。');
+    },
     'save-question':()=>{
       const id=el('#edit-id').value,q=state.draft.find(q=>q.id===id),answer=el('#edit-answer').value.trim();
       const options=el('#edit-options').value.split('\n').map(x=>x.trim()).filter(Boolean),text=el('#edit-word-ids').value.trim();
